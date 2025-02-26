@@ -12,6 +12,7 @@ library(httr2)
 library(jsonlite)
 library(R.utils)
 library(glue)
+library(rvest)
 ```
 
 ```{r}
@@ -25,7 +26,7 @@ Hardest first.
 
 # Liestal-Weideli
 
-Due to the fact that historical data for liestal is not readily available I will try to supplement it by collecting data for regions in Switzerland near it and attempt to "tweak" (will go into this later) it to match liestal weather as close as possible.
+Due to the fact that historical data for liestal is not readily available I will try to supplement it by collecting data for regions in Switzerland near it and use a surrogate for liestal.
 
 ```{r}
 swizz_stations_list <- list()
@@ -105,4 +106,99 @@ map(swizz_stations_list, as.data.frame) %>%
   as.list() %>%
   lapply(., station_FTP_collect_process)
 
+```
+
+Now I will collect the most recent Liestal weather data to compare
+
+```{r}
+get_weather_table <- function(url)
+  read_html(url) %>% 
+    html_nodes("div.monthly-calendar") %>% 
+    html_text2() %>%
+    str_replace("N/A", "N/A N/A") %>%
+    str_remove_all("°|Hist. Avg. ") %>%
+    str_split(" ", simplify = TRUE) %>%
+    parse_number() %>%
+    matrix(ncol = 3, 
+           byrow = TRUE,
+           dimnames = list(NULL, c("day", "tmax", "tmin"))) %>%
+    as_tibble() %>%
+    slice(which(day == 1)[1]:n()) %>%
+  { 
+      ones <- which(.$day == 1)
+      if (length(ones) >= 2) {
+        slice(., 1:(ones[2] - 1))
+      } else {
+        .  
+      }
+    }
+```
+
+```{r}
+liestal_2024 <-
+  tibble(
+    base_url = "https://web.archive.org/web/20250226/https://www.accuweather.com/en/ch/liestal/311994/",
+    month = month.name[1:12],
+    year = 2024,
+    url = str_c(base_url, tolower(month), "-weather/311994?year=", year)) %>%
+  mutate(temp = map(url, get_weather_table)) %>%
+  pull(temp) %>%
+  reduce(bind_rows) %>%
+  transmute(date = seq(as.Date("2024-01-01"), as.Date("2024-12-31"), 1),
+            year = parse_number(format(date, "%Y")),
+            tmax = (tmax - 32)* 5/9 ,
+            tmin = (tmin - 32)* 5/9 ,
+            temp = (tmax + tmin) / 2)  
+```
+
+Calculate average difference in temperature
+
+```{r}
+basel_2024 <- read_csv("Data/SZ000001940.csv") %>%
+  filter(grepl("^2024", as.character(DATE)))
+
+bale_2024 <- read_csv("Data/FRM00007299.csv") %>%
+  filter(grepl("^2024", as.character(DATE)))
+```
+
+```{r}
+mean(abs(liestal_2024$tmax - basel_2024$TMAX), na.rm = TRUE)
+
+mean(abs(liestal_2024$tmax - bale_2024$TMAX), na.rm = TRUE)
+```
+
+```{r}
+mean(abs(liestal_2024$tmin - basel_2024$TMIN), na.rm = TRUE)
+
+mean(abs(liestal_2024$tmin - bale_2024$TMIN), na.rm = TRUE)
+```
+
+```{r}
+mean(abs(liestal_2024$temp - basel_2024$TAVG), na.rm = TRUE)
+
+mean(abs(liestal_2024$temp - bale_2024$TAVG), na.rm = TRUE)
+```
+
+Basel is generally closer in temperature, so I will continue with Basel
+
+```{r}
+(cor(liestal_2024$tmax, basel_2024$TMAX, use = "complete.obs"))
+(cor(liestal_2024$tmin, basel_2024$TMIN, use = "complete.obs"))
+(cor(liestal_2024$temp, basel_2024$TAVG, use = "complete.obs"))
+```
+
+Strong correlation, I will continue with basel as the surrogate.
+
+```{r}
+read_csv("Data/SZ000001940.csv") %>%
+  select(-STATION) %>%
+  mutate(
+    
+    TAVG = ifelse(is.na(TAVG) & !is.na(TMIN) & !is.na(TMAX), (TMIN + TMAX) / 2, TAVG),
+    
+    TMIN = ifelse(is.na(TMIN) & !is.na(TAVG) & !is.na(TMAX), (2 * TAVG - TMAX), TMIN),
+    
+    TMAX = ifelse(is.na(TMAX) & !is.na(TAVG) & !is.na(TMIN), (2 * TAVG - TMIN), TMAX)
+  ) %>%
+  write.csv(.,file="Data/liestal-weather-data.csv")
 ```
