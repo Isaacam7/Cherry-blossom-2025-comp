@@ -10,6 +10,8 @@ This quarto file is meant to document how I collect weather data to use for each
 library(tidyverse)
 library(httr2)
 library(jsonlite)
+library(R.utils)
+library(glue)
 ```
 
 ```{r}
@@ -17,4 +19,90 @@ token <- read.table("noaa-token.txt")$V1 #not in the github (my private token)
 noaa_base_url <- 'https://www.ncei.noaa.gov/cdo-web/api/v2/'
 noaa_base_req <- request(noaa_base_url) %>%
   req_headers(token = token) # add the API key to the request header
+```
+
+Hardest first.
+
+# Liestal-Weideli
+
+Due to the fact that historical data for liestal is not readily available I will try to supplement it by collecting data for regions in Switzerland near it and attempt to "tweak" (will go into this later) it to match liestal weather as close as possible.
+
+```{r}
+swizz_stations_list <- list()
+offset <- 1
+
+repeat {
+  next_page <- noaa_base_req %>% 
+    req_url_path_append('stations') %>% 
+    req_url_query(
+      extent = c( 47.4814 - 0.25, 
+                 7.730519 - 0.25,
+                  47.4814 + 0.25,
+                 7.730519	+ 0.25) %>% 
+        paste(collapse = ','),
+      datasetid = 'GHCND',
+      startdate = '2025-01-01',
+      offset = offset,
+      limit = 100
+    ) %>%
+    req_retry(max_tries = 10) %>%
+    req_perform() |> 
+    resp_body_json() 
+  
+  swizz_stations_list <- c(swizz_stations_list,
+                   next_page$results)
+  offset <- offset + next_page$metadata$resultset$limit
+  
+  if (offset > next_page$metadata$resultset$count) {
+    break
+  }
+}
+
+map(swizz_stations_list, as.data.frame) %>%
+  do.call(what=rbind) %>%
+  select(mindate,maxdate,name,id,datacoverage)
+```
+
+Two areas that seem to be relatively close with decent time span and good data coverage. Next I will pull all available data for each station. Rather than call using the api the data will be downloaded straight from the FTP (as the rate limit will likely break under thousands of calls at once)
+
+```{r}
+station_FTP_collect_process <- function(id){
+  
+  url <-glue("https://www.ncei.noaa.gov/pub/data/ghcn/daily/by_station/{id}.csv.gz")
+  
+  dest.file <- glue("Data/{id}.csv.gz")
+  download.file(url, dest.file, mode = "wb")
+  gunzip(dest.file, overwrite = TRUE, remove = TRUE) 
+  
+
+  #now format data correctly
+  
+  dest.file <- gsub(".gz", "", dest.file)
+  
+  read_csv(dest.file,col_names = F) %>%
+    select(1:4) %>%
+    rename(STATION=X1,DATE=X2,ELEMENT=X3,
+           VALUE=X4) %>%
+    mutate(
+      #convert temperature values to normal celcius (stored in tenths of degrees) 
+      VALUE = ifelse(ELEMENT %in% c("TMAX", "TMIN", "TAVG"), VALUE / 10, VALUE),
+      DATE = ymd(DATE) 
+    ) %>%
+    pivot_wider(names_from = ELEMENT, values_from = VALUE) %>%
+    arrange(DATE) %>%
+    write.csv(.,file=dest.file,row.names = FALSE)
+  
+    return(glue("{dest.file} processed"))
+}
+```
+
+```{r}
+map(swizz_stations_list, as.data.frame) %>%
+  do.call(what=rbind) %>%
+  select(id) %>%
+  pull() %>%
+  gsub("GHCND:", "", .) %>%
+  as.list() %>%
+  lapply(., station_FTP_collect_process)
+
 ```
