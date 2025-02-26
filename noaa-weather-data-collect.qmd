@@ -29,35 +29,43 @@ Hardest first.
 Due to the fact that historical data for liestal is not readily available I will try to supplement it by collecting data for regions in Switzerland near it and use a surrogate for liestal.
 
 ```{r}
-swizz_stations_list <- list()
-offset <- 1
-
-repeat {
-  next_page <- noaa_base_req %>% 
-    req_url_path_append('stations') %>% 
-    req_url_query(
-      extent = c( 47.4814 - 0.25, 
-                 7.730519 - 0.25,
-                  47.4814 + 0.25,
-                 7.730519	+ 0.25) %>% 
-        paste(collapse = ','),
-      datasetid = 'GHCND',
-      startdate = '2025-01-01',
-      offset = offset,
-      limit = 100
-    ) %>%
-    req_retry(max_tries = 10) %>%
-    req_perform() |> 
-    resp_body_json() 
+get_station_list <- function(lat_lon,area_search){
+  stations_list <- list()
+  offset <- 1
   
-  swizz_stations_list <- c(swizz_stations_list,
-                   next_page$results)
-  offset <- offset + next_page$metadata$resultset$limit
-  
-  if (offset > next_page$metadata$resultset$count) {
-    break
+  repeat {
+    next_page <- noaa_base_req %>% 
+      req_url_path_append('stations') %>% 
+      req_url_query(
+        extent = c(lat_lon[1] - area_search, 
+                   lat_lon[2] - area_search,
+                    lat_lon[1] + area_search,
+                   lat_lon[2]	+ area_search) %>% 
+          paste(collapse = ','),
+        datasetid = 'GHCND',
+        startdate = '2025-01-01',
+        offset = offset,
+        limit = 100
+      ) %>%
+      req_retry(max_tries = 10) %>%
+      req_perform() |> 
+      resp_body_json() 
+    
+    stations_list <- c(stations_list,
+                     next_page$results)
+    offset <- offset + next_page$metadata$resultset$limit
+    
+    if (offset > next_page$metadata$resultset$count) {
+      break
+    }
   }
+  
+  return(stations_list)
 }
+```
+
+```{r}
+swizz_stations_list <- get_station_list(c(47.4814,7.730519),0.25)
 
 map(swizz_stations_list, as.data.frame) %>%
   do.call(what=rbind) %>%
@@ -200,5 +208,41 @@ read_csv("Data/SZ000001940.csv") %>%
     
     TMAX = ifelse(is.na(TMAX) & !is.na(TAVG) & !is.na(TMIN), (2 * TAVG - TMIN), TMAX)
   ) %>%
-  write.csv(.,file="Data/liestal-weather-data.csv")
+  write.csv(.,file="Data/liestal-weather-data.csv",row.names = F)
+```
+
+# Kyoto
+
+```{r}
+kyoto_stations_list <- get_station_list(c(35.0120,135.6761),0.25)
+
+map(kyoto_stations_list, as.data.frame) %>%
+  do.call(what=rbind) %>%
+  select(mindate,maxdate,name,id,datacoverage)
+```
+
+Only 1 dataset so this shall be the weather data for kyoto
+
+```{r}
+map(kyoto_stations_list, as.data.frame) %>%
+  do.call(what=rbind) %>%
+  select(id) %>%
+  pull() %>%
+  gsub("GHCND:", "", .) %>%
+  as.list() %>%
+  lapply(., station_FTP_collect_process)
+```
+
+```{r}
+read_csv("Data/JA000047759.csv") %>%
+  select(-STATION) %>%
+  mutate(
+    
+    TAVG = ifelse(is.na(TAVG) & !is.na(TMIN) & !is.na(TMAX), (TMIN + TMAX) / 2, TAVG),
+    
+    TMIN = ifelse(is.na(TMIN) & !is.na(TAVG) & !is.na(TMAX), (2 * TAVG - TMAX), TMIN),
+    
+    TMAX = ifelse(is.na(TMAX) & !is.na(TAVG) & !is.na(TMIN), (2 * TAVG - TMIN), TMAX)
+  ) %>%
+  write.csv(.,file="Data/kyoto-weather-data.csv",row.names = F)
 ```
