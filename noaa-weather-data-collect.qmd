@@ -318,3 +318,39 @@ read_csv("Data/USW00094728.csv") %>%
   ) %>%
   write.csv(.,file="Data/new-york-weather-data.csv",row.names = F)
 ```
+
+# Washington, DC
+
+```{r}
+dc_station_list <- get_station_list(c(38.8853,-77.0386),0.04)
+
+map(dc_station_list, as.data.frame) %>%
+  do.call(what=rbind) %>%
+  select(mindate,maxdate,name,id,datacoverage)
+```
+
+first one has bad coverage and date range, will continue with reagan only
+
+```{r}
+map(dc_station_list, as.data.frame) %>%
+  do.call(what=rbind) %>%
+  select(id) %>%
+  pull() %>%
+  gsub("GHCND:", "", .) %>%
+  as.list() %>%
+  lapply(., station_FTP_collect_process)
+```
+
+```{r}
+read_csv("Data/USW00013743.csv") %>%
+  select(-STATION) %>%
+  mutate(
+    
+    TAVG = ifelse(is.na(TAVG) & !is.na(TMIN) & !is.na(TMAX), (TMIN + TMAX) / 2, TAVG),
+    
+    TMIN = ifelse(is.na(TMIN) & !is.na(TAVG) & !is.na(TMAX), (2 * TAVG - TMAX), TMIN),
+    
+    TMAX = ifelse(is.na(TMAX) & !is.na(TAVG) & !is.na(TMIN), (2 * TAVG - TMIN), TMAX)
+  ) %>%
+  write.csv(.,file="Data/dc-weather-data.csv",row.names = F)
+```
