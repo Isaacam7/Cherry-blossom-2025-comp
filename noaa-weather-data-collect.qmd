@@ -246,3 +246,75 @@ read_csv("Data/JA000047759.csv") %>%
   ) %>%
   write.csv(.,file="Data/kyoto-weather-data.csv",row.names = F)
 ```
+
+# Vancouver
+
+```{r}
+vancouver_stations_list <- get_station_list(c(49.2237,-123.1636),0.025)
+
+map(vancouver_stations_list, as.data.frame) %>%
+  do.call(what=rbind) %>%
+  select(mindate,maxdate,name,id,datacoverage)
+```
+
+Ok data coverate at \~0.7
+
+```{r}
+map(vancouver_stations_list, as.data.frame) %>%
+  do.call(what=rbind) %>%
+  select(id) %>%
+  pull() %>%
+  gsub("GHCND:", "", .) %>%
+  as.list() %>%
+  lapply(., station_FTP_collect_process)
+```
+
+```{r}
+read_csv("Data/CA001108395.csv") %>%
+  select(-STATION) %>%
+  mutate(
+    
+    TAVG = ifelse(is.na(TAVG) & !is.na(TMIN) & !is.na(TMAX), (TMIN + TMAX) / 2, TAVG),
+    
+    TMIN = ifelse(is.na(TMIN) & !is.na(TAVG) & !is.na(TMAX), (2 * TAVG - TMAX), TMIN),
+    
+    TMAX = ifelse(is.na(TMAX) & !is.na(TAVG) & !is.na(TMIN), (2 * TAVG - TMIN), TMAX)
+  ) %>%
+  write.csv(.,file="Data/vancouver-weather-data.csv",row.names = F)
+```
+
+# New York City
+
+```{r}
+new_york_stations_list <- get_station_list(c(40.73040,-73.99809),0.05)
+
+map(new_york_stations_list, as.data.frame) %>%
+  do.call(what=rbind) %>%
+  select(mindate,maxdate,name,id,datacoverage)
+```
+
+Perfect data coverage!
+
+```{r}
+map(new_york_stations_list, as.data.frame) %>%
+  do.call(what=rbind) %>%
+  select(id) %>%
+  pull() %>%
+  gsub("GHCND:", "", .) %>%
+  as.list() %>%
+  lapply(., station_FTP_collect_process)
+```
+
+```{r}
+read_csv("Data/USW00094728.csv") %>%
+  select(-STATION) %>%
+  mutate(
+    
+    TAVG = ifelse(is.na(TAVG) & !is.na(TMIN) & !is.na(TMAX), (TMIN + TMAX) / 2, TAVG),
+    
+    TMIN = ifelse(is.na(TMIN) & !is.na(TAVG) & !is.na(TMAX), (2 * TAVG - TMAX), TMIN),
+    
+    TMAX = ifelse(is.na(TMAX) & !is.na(TAVG) & !is.na(TMIN), (2 * TAVG - TMIN), TMAX)
+  ) %>%
+  write.csv(.,file="Data/new-york-weather-data.csv",row.names = F)
+```
