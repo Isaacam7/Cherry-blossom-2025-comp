@@ -1,0 +1,193 @@
+---
+title: "Liestal Model Builder"
+format: html
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+library(chillR)
+library(randomForest)
+library(caret)
+```
+
+```{r}
+liestal <- read_csv("Data/liestal-weather-data.csv")
+head(liestal)
+```
+
+```{r}
+liestal_bloom <- read.csv("Data/liestal.csv")
+str(liestal_bloom)
+```
+
+```{r}
+liestal_bloom_only <- liestal_bloom %>%
+  select(bloom_date,bloom_doy) %>%
+  mutate(bloom_date = as.Date(bloom_date))
+```
+
+The first variable to make is cumulative growing degree days (GDD). GDD are a measure of heat accumulation used by gardners and farmers to predict plant and animal development rates such as the date that a flower will bloom. (Source: https://en.wikipedia.org/wiki/Growing_degree-day)
+
+```{r}
+a <- liestal %>%
+  left_join(liestal_bloom_only, by = join_by(DATE == bloom_date)) %>%
+  mutate(cherry_bloomed = ifelse(!is.na(bloom_doy), 1, 0)) %>%
+  select(-bloom_doy)
+
+```
+
+```{r}
+temp_data <- liestal %>%
+  mutate(
+    Year = as.numeric(format(DATE, "%Y")),
+    Month = as.numeric(format(DATE, "%m")),
+    Day = as.numeric(format(DATE, "%d"))
+  ) %>%
+  select(Year, Month, Day, Tmin = TMIN, Tmax = TMAX)
+hourly_temps <- stack_hourly_temps(temp_data, latitude = 47.4814)$hourtemps
+```
+
+```{r}
+chilling_start <- "11-01"  # November 1st
+chilling_end <- "02-11"    # February 11th
+
+# Filter data for the chilling period
+chilling_data <- hourly_temps %>%
+  filter(
+    (paste0(Month, "-", Day) >= chilling_start & Month >= 11) |  # Filter November - December
+    (paste0(Month, "-", Day) <= chilling_end & Month <= 2)       # Filter January - February
+  )
+
+chill_results <- chilling(
+  hourtemps  = chilling_data,
+  Start_JDay = min(chilling_data$JDay),  # Use existing JDay
+  End_JDay = max(chilling_data$JDay)     # Use existing JDay
+)
+```
+
+```{r}
+
+T_base <- 4  
+T_max_cap <- 36  
+
+liestal_GDD <- liestal %>%
+  mutate(
+    Year = year(DATE),
+    TAVG_adj = pmin(TAVG, T_max_cap),
+    GDD = ifelse(DATE >= as.Date(paste0(Year, "-02-11")) & DATE <= as.Date(paste0(Year, "-05-16")), 
+                 pmax(TAVG_adj - T_base, 0), 0)  # Apply GDD formula
+  )
+```
+
+```{r}
+liestal_GDD <- liestal_GDD %>%
+  group_by(Year) %>%
+  mutate(GDD_cumsum = cumsum(GDD)) %>%
+  ungroup()
+```
+
+```{r}
+liestal_GDD <- liestal_GDD %>%
+  filter(DATE >= as.Date(paste0(Year, "-02-11")) & DATE <= as.Date(paste0(Year, "-05-16"))) %>%
+  mutate(JDay = as.numeric(format(DATE, "%j")) - as.numeric(format(as.Date(paste0(Year, "-02-11")), "%j")) + 1)  # Day index starting from Feb 11
+
+# Pivot Data: Years as Rows, Days as Columns
+gdd_matrix <- liestal_GDD %>%
+  select(Year, JDay, GDD_cumsum) %>%
+  pivot_wider(names_from = JDay, values_from = GDD_cumsum, names_prefix = "CUMSUM_GDD_DAY_") %>%
+  filter(row_number() <= n()-1) %>%
+  mutate(
+    Chilling_Hours = chill_results$Chilling_Hours,
+    Utah_Model = chill_results$Utah_Model,
+    Chill_Portions = chill_results$Chill_portions,
+    GDH =chill_results$GDH
+  ) %>%
+  select(-Year,-CUMSUM_GDD_DAY_96)
+```
+
+```{r}
+bloom_data <- tail(liestal_bloom_only, 124)
+pca_result <- prcomp(gdd_matrix, scale. = TRUE)
+```
+
+```{r}
+explained_var <- cumsum(pca_result$sdev^2) / sum(pca_result$sdev^2)
+num_pcs <- which(explained_var >= 0.95)[1]
+pca_data <- as.data.frame(pca_result$x[, 1:num_pcs]) 
+```
+
+```{r}
+final_data <- cbind(pca_data, bloom_doy = bloom_data$bloom_doy)
+set.seed(49212)
+train_index <- createDataPartition(final_data$bloom_doy, p = 0.8, list = FALSE)
+train_data <- final_data[train_index, ]
+test_data <- final_data[-train_index, ]
+```
+
+```{r}
+rf_model <- randomForest(bloom_doy ~ ., data = train_data, ntree = 100, importance = TRUE)
+
+# Predict on test data
+predictions <- predict(rf_model, test_data)
+
+# Calculate RMSE and MAE
+rmse <- sqrt(mean((predictions - test_data$bloom_doy)^2))
+mae <- mean(abs(predictions - test_data$bloom_doy))
+
+# Print results
+cat("RMSE:", rmse, "\n")
+cat("MAE:", mae, "\n")
+
+```
+
+```{r}
+importance(rf_model)
+```
+
+```{r}
+gdd_matrix[rowSums(is.na(gdd_matrix)) > 0, ] %>%
+  colnames(.)[colSums(is.na(.)) > 0]
+```
+
+```{r}
+ntree_values <- seq(1, 500, by = 10)  # Train at intervals of 10 for efficiency
+
+# Initialize empty vectors for storing RMSE and MAE
+rmse_values <- numeric(length(ntree_values))
+mae_values <- numeric(length(ntree_values))
+
+# Train models with varying ntree and store performance metrics
+for (i in seq_along(ntree_values)) {
+  set.seed(277)  # Ensure reproducibility
+  rf_model <- randomForest(bloom_doy ~ ., data = train_data, ntree = ntree_values[i])
+  
+  # Predict on test data
+  predictions <- predict(rf_model, test_data)
+  
+  # Compute RMSE and MAE
+  rmse_values[i] <- sqrt(mean((predictions - test_data$bloom_doy)^2))
+  mae_values[i] <- mean(abs(predictions - test_data$bloom_doy))
+}
+
+# Create a dataframe for visualization
+performance_df <- data.frame(
+  ntree = ntree_values,
+  RMSE = rmse_values,
+  MAE = mae_values
+)
+
+```
+
+```{r}
+ggplot(performance_df, aes(x = ntree)) +
+  geom_line(aes(y = RMSE, color = "RMSE"), size = 1.2) +
+  geom_line(aes(y = MAE, color = "MAE"), size = 1.2) +
+  labs(
+    title = "Effect of Number of Trees on Random Forest Performance",
+    x = "Number of Trees (ntree)",
+    y = "Error",
+    color = "Metric"
+  ) +
+  theme_minimal()
+```
