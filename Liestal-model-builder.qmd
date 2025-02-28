@@ -329,6 +329,6 @@ stopCluster(cl)
 results_xgb <- bind_rows(results_list)
 ```
 ```{r}
-#write.csv(results, "Data/liestal_xgb_results.csv", row.names = FALSE)
+#write.csv(results_xgb, "Data/liestal_xgb_results.csv", row.names = FALSE)
 ```
 
