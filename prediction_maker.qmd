@@ -1,0 +1,874 @@
+---
+title: "prediction"
+format: html
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+library(httr2)
+library(jsonlite)
+library(glue)
+library(rvest)
+```
+
+## Get 2025 data
+
+### liestal
+
+```{r}
+get_weather_table <- function(url)
+  read_html(url) %>% 
+    html_nodes("div.monthly-calendar") %>% 
+    html_text2() %>%
+    str_replace("N/A", "N/A N/A") %>%
+    str_remove_all("°|Hist. Avg. ") %>%
+    str_split(" ", simplify = TRUE) %>%
+    parse_number() %>%
+    matrix(ncol = 3, 
+           byrow = TRUE,
+           dimnames = list(NULL, c("day", "tmax", "tmin"))) %>%
+    as_tibble() %>%
+    dplyr::slice(which(day == 1)[1]:n()) %>%
+  { 
+      ones <- which(.$day == 1)
+      if (length(ones) >= 2) {
+        dplyr::slice(., 1:(ones[2] - 1))
+      } else {
+        .  
+      }
+    }
+```
+
+```{r}
+liestal <- read_csv("Data/liestal-weather-data-for-prediction.csv") %>%
+  select(TMAX, TMIN, TAVG, PRCP, DATE) %>%
+  mutate(DATE = as.Date(DATE, format="%m/%d/%Y")) %>% filter(year(DATE) == 2025)
+head(liestal)
+
+```
+
+```{r}
+liestal_2025 <-
+  tibble(
+    base_url = "https://web.archive.org/web/20250226/https://www.accuweather.com/en/ch/liestal/311994/",
+    month = month.name[2:5],
+    year = 2025,
+    url = str_c(base_url, tolower(month), "-weather/311994?year=", year)) %>%
+  mutate(temp = map(url, get_weather_table)) %>%
+  pull(temp) %>%
+  reduce(bind_rows) %>%
+  transmute(date = seq(as.Date("2025-02-01"), as.Date("2025-05-31"), 1),
+            year = parse_number(format(date, "%Y")),
+            tmax = (tmax - 32)* 5/9 ,
+            tmin = (tmin - 32)* 5/9 ,
+            temp = (tmax + tmin) / 2)    
+```
+
+```{r}
+liestal <- liestal %>%
+  left_join(liestal_2025, by = join_by(DATE == date)) %>%
+  mutate(
+    TAVG = ifelse(DATE >= as.Date("2025-02-01") & DATE <= as.Date("2025-05-31"),
+                  temp, TAVG),
+    
+    TMAX = ifelse(DATE >= as.Date("2025-02-01") & DATE <= as.Date("2025-05-31"),
+                           tmax, TMAX),
+    
+    TMIN = ifelse(DATE >= as.Date("2025-02-01") & DATE <= as.Date("2025-05-31"),
+                           tmin, TMIN)
+  ) %>%
+  select(-temp,-tmax,-tmin,-year) 
+```
+
+```{r}
+tail(liestal)
+```
+
+### vancouver 
+
+```{r}
+vancouver  <- read_csv("Data/vancouver-weather-data-for-prediction.csv") %>%
+  select(TMAX, TMIN, TAVG, PRCP, DATE) %>%
+  mutate(DATE = as.Date(DATE, format="%m/%d/%Y")) %>% filter(year(DATE) == 2025)
+head(vancouver)
+```
+
+```{r}
+vancouver_2025 <-
+  tibble(
+    base_url = "https://web.archive.org/web/20250226/https://www.accuweather.com/en/ca/vancouver/v6c/",
+    month = month.name[2:5],
+    year = 2025,
+    url = str_c(base_url, tolower(month), "-weather/53286?year=", year)) %>%
+  mutate(temp = map(url, get_weather_table)) %>%
+  pull(temp) %>%
+  reduce(bind_rows) %>%
+  transmute(date = seq(as.Date("2025-02-01"), as.Date("2025-05-31"), 1),
+            year = parse_number(format(date, "%Y")),
+            tmax = (tmax - 32)* 5/9 ,
+            tmin = (tmin - 32)* 5/9 ,
+            temp = (tmax + tmin) / 2)    
+```
+
+```{r}
+vancouver<- vancouver %>%
+  left_join(vancouver_2025, by = join_by(DATE == date)) %>%
+  mutate(
+    TAVG = ifelse(DATE >= as.Date("2025-02-01") & DATE <= as.Date("2025-05-31"),
+                  temp, TAVG),
+    
+    TMAX = ifelse(DATE >= as.Date("2025-02-01") & DATE <= as.Date("2025-05-31"),
+                           tmax, TMAX),
+    
+    TMIN = ifelse(DATE >= as.Date("2025-02-01") & DATE <= as.Date("2025-05-31"),
+                           tmin, TMIN)
+  ) %>%
+  select(-temp,-tmax,-tmin,-year) 
+tail(vancouver)
+```
+
+Washington DC
+
+```{r}
+dc <- read_csv("Data/dc-weather-data-for-prediction.csv") %>%
+  select(TMAX, TMIN, TAVG, PRCP, DATE) %>%
+  mutate(DATE = as.Date(DATE, format="%m/%d/%Y")) %>% filter(year(DATE) == 2025)
+head(dc)
+```
+
+```{r}
+dc_2025 <-
+  tibble(
+    base_url = "https://web.archive.org/web/20250226/https://www.accuweather.com/en/us/washington/20006/",
+    month = month.name[2:5],
+    year = 2025,
+    url = str_c(base_url, tolower(month), "-weather/18-327659_1_al?year=", year)) %>%
+  mutate(temp = map(url, get_weather_table)) %>%
+  pull(temp) %>%
+  reduce(bind_rows) %>%
+  transmute(date = seq(as.Date("2025-02-01"), as.Date("2025-05-31"), 1),
+            year = parse_number(format(date, "%Y")),
+            tmax = (tmax - 32)* 5/9 ,
+            tmin = (tmin - 32)* 5/9 ,
+            temp = (tmax + tmin) / 2)  
+```
+
+```{r}
+dc <- dc %>%
+  left_join(dc_2025, by = join_by(DATE == date)) %>%
+  mutate(
+    TAVG = ifelse(DATE >= as.Date("2025-02-01") & DATE <= as.Date("2025-05-31"),
+                  temp, TAVG),
+    
+    TMAX = ifelse(DATE >= as.Date("2025-02-01") & DATE <= as.Date("2025-05-31"),
+                           tmax, TMAX),
+    
+    TMIN = ifelse(DATE >= as.Date("2025-02-01") & DATE <= as.Date("2025-05-31"),
+                           tmin, TMIN)
+  ) %>%
+  select(-temp,-tmax,-tmin,-year) 
+tail(dc)
+```
+
+### New York City
+
+```{r}
+nyc <- read_csv("Data/new-york-weather-data-for-prediction.csv") %>%
+  select(TMAX, TMIN, TAVG, PRCP, DATE) %>%
+  mutate(DATE = as.Date(DATE, format="%m/%d/%Y")) %>% filter(year(DATE) == 2025)
+head(nyc)
+```
+
+```{r}
+nyc_2025 <-
+  tibble(
+    base_url = "https://web.archive.org/web/20250226/https://www.accuweather.com/en/us/new-york/10021/",
+    month = month.name[2:5],
+    year = 2025,
+    url = str_c(base_url, tolower(month), "-weather/349727?year=", year)) %>%
+  mutate(temp = map(url, get_weather_table)) %>%
+  pull(temp) %>%
+  reduce(bind_rows) %>%
+  transmute(date = seq(as.Date("2025-02-01"), as.Date("2025-05-31"), 1),
+            year = parse_number(format(date, "%Y")),
+            tmax = (tmax - 32)* 5/9 ,
+            tmin = (tmin - 32)* 5/9 ,
+            temp = (tmax + tmin) / 2) 
+```
+
+```{r}
+nyc<- nyc %>%
+  left_join(nyc_2025, by = join_by(DATE == date)) %>%
+  mutate(
+    TAVG = ifelse(DATE >= as.Date("2025-02-01") & DATE <= as.Date("2025-05-31"),
+                  temp, TAVG),
+    
+    TMAX = ifelse(DATE >= as.Date("2025-02-01") & DATE <= as.Date("2025-05-31"),
+                           tmax, TMAX),
+    
+    TMIN = ifelse(DATE >= as.Date("2025-02-01") & DATE <= as.Date("2025-05-31"),
+                           tmin, TMIN)
+  ) %>%
+  select(-temp,-tmax,-tmin,-year) 
+tail(nyc)
+```
+
+### kyoto
+
+```{r}
+kyoto <- read_csv("Data/kyoto-weather-data-for-prediction.csv") %>%
+  select(TMAX, TMIN, TAVG, PRCP, DATE) %>%
+  mutate(DATE = as.Date(DATE, format="%m/%d/%Y")) %>% filter(year(DATE) == 2025)
+head(kyoto)
+```
+
+```{r}
+kyoto_2025 <-
+  tibble(
+    base_url = "https://web.archive.org/web/20250226/https://www.accuweather.com/en/jp/kyoto-shi/2-224436_1_al/",
+    month = month.name[2:5],
+    year = 2025,
+    url = str_c(base_url, tolower(month), "-weather/2-224436_1_al?year=", year)) %>%
+  mutate(temp = map(url, get_weather_table)) %>%
+  pull(temp) %>%
+  reduce(bind_rows) %>%
+  transmute(date = seq(as.Date("2025-02-01"), as.Date("2025-05-31"), 1),
+            year = parse_number(format(date, "%Y")),
+            tmax = (tmax - 32)* 5/9 ,
+            tmin = (tmin - 32)* 5/9 ,
+            temp = (tmax + tmin) / 2) 
+```
+
+```{r}
+kyoto <- kyoto %>%
+  left_join(nyc_2025, by = join_by(DATE == date)) %>%
+  mutate(
+    TAVG = ifelse(DATE >= as.Date("2025-02-01") & DATE <= as.Date("2025-05-31"),
+                  temp, TAVG),
+    
+    TMAX = ifelse(DATE >= as.Date("2025-02-01") & DATE <= as.Date("2025-05-31"),
+                           tmax, TMAX),
+    
+    TMIN = ifelse(DATE >= as.Date("2025-02-01") & DATE <= as.Date("2025-05-31"),
+                           tmin, TMIN)
+  ) %>%
+  select(-temp,-tmax,-tmin,-year) 
+tail(kyoto)
+```
+
+rebuild data
+
+```{r}
+library(tidyverse)
+library(chillR)
+library(randomForest)
+library(caret)
+library(Matrix)
+library(xgboost)
+library(zoo)
+library(parallel)
+```
+
+```{r}
+liestal_bloom <- read.csv("Data/liestal.csv")
+kyoto_bloom <- read.csv("Data/kyoto.csv")
+dc_bloom <- read.csv("Data/washingtondc.csv")
+nyc_bloom <- read.csv("Data/nyc.csv")
+vancouver_bloom <- read.csv("Data/vancouver.csv")
+```
+
+```{r}
+vancouver_bloom_only <- vancouver_bloom %>%
+  select(bloom_date,bloom_doy) %>%
+  mutate(bloom_date = as.character(bloom_date))
+
+liestal_bloom_only <- liestal_bloom %>%
+  select(bloom_date,bloom_doy) %>%
+  mutate(bloom_date = as.character(bloom_date))
+
+kyoto_bloom_only <- kyoto_bloom %>%
+  select(bloom_date,bloom_doy) %>%
+  mutate(bloom_date = as.character(bloom_date))
+
+dc_bloom_only <- dc_bloom %>%
+  select(bloom_date,bloom_doy) %>%
+  mutate(bloom_date = as.character(bloom_date))
+
+nyc_bloom_2024 <- nyc_bloom %>%
+  select(bloom_date,bloom_doy) %>%
+  mutate(bloom_date = as.character(bloom_date),
+         year = 2024)
+
+nyc_data_npn <- read_csv("Data/USA-NPN_status_intensity_observations_data.csv") %>%
+  filter(Site_ID == 32789,
+         Species_ID == 228,
+         Update_Datetime != "-9999") %>%
+  mutate(Observation_Date = mdy(sub(" .*", "", Update_Datetime)))
+
+nyc_bloom_only <- nyc_data_npn %>%
+  arrange(Observation_Date) %>% 
+  mutate(year = year(Observation_Date)) %>% 
+  group_by(year) %>% 
+  summarize(first_flower_index = min(which(Phenophase_Status == 1)),
+            bloom_date = strftime(Observation_Date[first_flower_index], format = '%Y-%m-%d'),
+            bloom_doy = Day_of_Year[first_flower_index],
+            .groups = 'drop') %>% 
+  filter(!is.na(bloom_doy)) %>% 
+  select(-first_flower_index) %>%
+  filter(year %in% 2019:2022) %>%
+  rbind(nyc_bloom_2024)
+```
+
+```{r}
+T_base <- 4  
+T_max_cap <- 36  
+
+
+nyc_GDD <- nyc %>%
+  mutate(
+    Year = year(DATE),
+    TAVG_adj = pmin(TAVG, T_max_cap),
+    GDD = ifelse(DATE >= as.Date(paste0(Year, "-01-01")) & DATE <= as.Date(paste0(Year, "-05-16")), 
+                 pmax(TAVG_adj - T_base, 0), 0)  
+  )
+
+nyc_GDD <- nyc_GDD %>%
+  group_by(Year) %>%
+  mutate(GDD_cumsum = cumsum(replace_na(GDD, 0))) %>%
+  ungroup()
+
+
+vancouver_GDD <- vancouver %>%
+  mutate(
+    Year = year(DATE),
+    TAVG_adj = ifelse(is.na(TAVG), NA, pmin(TAVG, T_max_cap))
+  ) %>%
+  fill(TAVG_adj, .direction = "up") %>%  # Fill missing TAVG_adj values upwards
+  fill(TAVG_adj, .direction = "down") %>%
+  mutate(
+    GDD = ifelse(
+      DATE >= as.Date(paste0(Year, "-01-01")) & DATE <= as.Date(paste0(Year, "-05-16")),
+      pmax(TAVG_adj - T_base, 0),
+      0
+    )
+  )
+
+vancouver_GDD <- vancouver_GDD %>%
+  group_by(Year) %>%
+  mutate(GDD_cumsum = cumsum(replace_na(GDD, 0))) %>%
+  ungroup()
+
+
+liestal_GDD <- liestal %>%
+  mutate(
+    Year = year(DATE),
+    TAVG_adj = pmin(TAVG, T_max_cap),
+    GDD = ifelse(DATE >= as.Date(paste0(Year, "-01-01")) & DATE <= as.Date(paste0(Year, "-05-16")), 
+                 pmax(TAVG_adj - T_base, 0), 0)  
+  )
+
+liestal_GDD <- liestal_GDD %>%
+  group_by(Year) %>%
+  mutate(GDD_cumsum = cumsum(replace_na(GDD, 0))) %>%
+  ungroup()
+
+
+kyoto_GDD <- kyoto %>%
+  mutate(
+    Year = year(DATE),
+    TAVG_adj = pmin(TAVG, T_max_cap),
+    GDD = ifelse(DATE >= as.Date(paste0(Year, "-01-01")) & DATE <= as.Date(paste0(Year, "-05-16")), 
+                 pmax(TAVG_adj - T_base, 0), 0)  
+  )
+
+kyoto_GDD <- kyoto_GDD %>%
+  group_by(Year) %>%
+  mutate(GDD_cumsum = cumsum(replace_na(GDD, 0))) %>%
+  ungroup()
+
+dc_GDD <- dc %>%
+  mutate(
+    Year = year(DATE),
+    TAVG_adj = pmin(TAVG, T_max_cap),
+    GDD = ifelse(DATE >= as.Date(paste0(Year, "-01-01")) & DATE <= as.Date(paste0(Year, "-05-16")), 
+                 pmax(TAVG_adj - T_base, 0), 0)  
+  )
+
+dc_GDD <- dc_GDD %>%
+  group_by(Year) %>%
+  mutate(GDD_cumsum = cumsum(replace_na(GDD, 0))) %>%
+  ungroup()
+```
+
+```{r}
+dc_final_data <- read_csv("Data/dc_final_data.csv")
+kyoto_final_data <- read_csv("Data/kyoto_final_data.csv")
+liestal_final_data <- read_csv("Data/liestal_final_data.csv")
+all_final_data <- read_csv("Data/all_final_data.csv")
+```
+
+```{r}
+vancouver_GDD <- vancouver_GDD %>%
+  filter(DATE >= as.Date(paste0(Year, "-01-01")) & DATE <= as.Date(paste0(Year, "-05-16"))) %>%
+  mutate(JDay = as.numeric(format(DATE, "%j")) - as.numeric(format(as.Date(paste0(Year, "-01-01")), "%j")) + 1)  
+
+gdd_matrix_vancouver <- vancouver_GDD %>%
+  select(Year, JDay, GDD_cumsum) %>%
+  pivot_wider(names_from = JDay, values_from = GDD_cumsum, names_prefix = "CUMSUM_GDD_DAY_") 
+```
+
+```{r}
+nyc_GDD <- nyc_GDD %>%
+  filter(DATE >= as.Date(paste0(Year, "-01-01")) & DATE <= as.Date(paste0(Year, "-05-16"))) %>%
+  mutate(JDay = as.numeric(format(DATE, "%j")) - as.numeric(format(as.Date(paste0(Year, "-01-01")), "%j")) + 1)  
+
+
+gdd_matrix_nyc <- nyc_GDD %>%
+  select(Year, JDay, GDD_cumsum) %>%
+  pivot_wider(names_from = JDay, values_from = GDD_cumsum, names_prefix = "CUMSUM_GDD_DAY_") 
+```
+
+```{r}
+
+kyoto_GDD <- kyoto_GDD %>%
+  complete(DATE = seq(min(DATE), max(DATE), by = "day")) %>%
+  fill(GDD_cumsum, .direction = "down") %>%
+  mutate(Year = year(DATE))
+
+kyoto_GDD <- kyoto_GDD %>%
+  filter(DATE >= as.Date(paste0(Year, "-01-01")) & DATE <= as.Date(paste0(Year, "-05-16"))) %>%
+  mutate(JDay = as.numeric(format(DATE, "%j")) - as.numeric(format(as.Date(paste0(Year, "-01-01")), "%j")) + 1)  
+
+
+
+gdd_matrix_kyoto <- kyoto_GDD %>%
+  select(Year, JDay, GDD_cumsum) %>%
+  pivot_wider(names_from = JDay, values_from = GDD_cumsum, names_prefix = "CUMSUM_GDD_DAY_") 
+  
+
+liestal_GDD <- liestal_GDD %>%
+  filter(DATE >= as.Date(paste0(Year, "-01-01")) & DATE <= as.Date(paste0(Year, "-05-16"))) %>%
+  mutate(JDay = as.numeric(format(DATE, "%j")) - as.numeric(format(as.Date(paste0(Year, "-01-01")), "%j")) + 1)  
+
+
+gdd_matrix_liestal <- liestal_GDD %>%
+  select(Year, JDay, GDD_cumsum) %>%
+  pivot_wider(names_from = JDay, values_from = GDD_cumsum, names_prefix = "CUMSUM_GDD_DAY_")
+
+
+dc_GDD <- dc_GDD %>%
+  filter(DATE >= as.Date(paste0(Year, "-01-01")) & DATE <= as.Date(paste0(Year, "-05-16"))) %>%
+  mutate(JDay = as.numeric(format(DATE, "%j")) - as.numeric(format(as.Date(paste0(Year, "-01-01")), "%j")) + 1)  
+
+
+gdd_matrix_dc <- dc_GDD %>%
+  select(Year, JDay, GDD_cumsum) %>%
+  pivot_wider(names_from = JDay, values_from = GDD_cumsum, names_prefix = "CUMSUM_GDD_DAY_") 
+
+```
+
+
+```{r}
+dc_bloom_lag <- dc_bloom_only %>%
+  arrange(bloom_date) %>%
+  rbind(data.frame(bloom_date = "2025-01-01", bloom_doy = 0)) %>%
+  mutate(
+    last_year_bloom_doy = lag(bloom_doy, 1),
+    
+    # Compute rolling mean excluding current value
+    avg_last_5 = rollapply(lag(bloom_doy), width = 5, FUN = mean, align = "right", fill = NA, partial = TRUE),
+    sd_last_5  = rollapply(lag(bloom_doy), width = 5, FUN = sd, align = "right", fill = NA, partial = TRUE),
+    
+    avg_last_10 = rollapply(lag(bloom_doy), width = 10, FUN = mean, align = "right", fill = NA, partial = TRUE),
+    sd_last_10  = rollapply(lag(bloom_doy), width = 10, FUN = sd, align = "right", fill = NA, partial = TRUE),
+    
+    Year = year(bloom_date)
+  ) %>%
+  select(-bloom_date, -bloom_doy) %>% tail(.,1)
+
+  nyc_bloom_lag <- nyc_bloom_only %>%
+  arrange(bloom_date) %>% 
+  rbind(data.frame(year=2025,bloom_date = "2025-01-01", bloom_doy = 0)) %>%  
+  mutate(
+    last_year_bloom_doy = lag(bloom_doy, 1),
+    avg_last_5 = rollapply(bloom_doy, width = 5, FUN = mean, align = "right", fill = NA, partial = TRUE),
+    sd_last_5 = rollapply(bloom_doy, width = 5, FUN = sd, align = "right", fill = NA, partial = TRUE),
+    avg_last_10 = rollapply(bloom_doy, width = 10, FUN = mean, align = "right", fill = NA, partial = TRUE),
+    sd_last_10 = rollapply(bloom_doy, width = 10, FUN = sd, align = "right", fill = NA, partial = TRUE),
+    Year = year(bloom_date) 
+  ) %>%
+  select(-bloom_date, -bloom_doy,-year) %>% tail(.,1)
+
+
+vancouver_bloom_lag <- vancouver_bloom_only %>%
+  arrange(bloom_date) %>%
+  rbind(data.frame(bloom_date = "2025-01-01", bloom_doy = 0)) %>% 
+  mutate(
+    last_year_bloom_doy = lag(bloom_doy, 1),
+    avg_last_5 = rollapply(bloom_doy, width = 5, FUN = mean, align = "right", fill = NA, partial = TRUE),
+    sd_last_5 = rollapply(bloom_doy, width = 5, FUN = sd, align = "right", fill = NA, partial = TRUE),
+    avg_last_10 = rollapply(bloom_doy, width = 10, FUN = mean, align = "right", fill = NA, partial = TRUE),
+    sd_last_10 = rollapply(bloom_doy, width = 10, FUN = sd, align = "right", fill = NA, partial = TRUE),
+    Year = year(bloom_date) 
+  ) %>%
+  select(-bloom_date, -bloom_doy) %>% tail(.,1)
+
+
+liestal_bloom_lag <- liestal_bloom_only %>%
+  arrange(bloom_date) %>%
+  rbind(data.frame(bloom_date = "2025-01-01", bloom_doy = 0)) %>%
+  mutate(
+    last_year_bloom_doy = lag(bloom_doy, 1),
+    
+    # Compute rolling mean excluding current value
+    avg_last_5 = rollapply(lag(bloom_doy), width = 5, FUN = mean, align = "right", fill = NA, partial = TRUE),
+    sd_last_5  = rollapply(lag(bloom_doy), width = 5, FUN = sd, align = "right", fill = NA, partial = TRUE),
+    
+    avg_last_10 = rollapply(lag(bloom_doy), width = 10, FUN = mean, align = "right", fill = NA, partial = TRUE),
+    sd_last_10  = rollapply(lag(bloom_doy), width = 10, FUN = sd, align = "right", fill = NA, partial = TRUE),
+    
+    Year = year(bloom_date)
+  ) %>%
+  select(-bloom_date, -bloom_doy) %>% tail(.,1)
+
+
+kyoto_bloom_lag <- kyoto_bloom_only %>%
+  arrange(bloom_date) %>%
+  rbind(data.frame(bloom_date = "2025-01-01", bloom_doy = 0)) %>%
+  mutate(
+    last_year_bloom_doy = lag(bloom_doy, 1),
+    
+    # Compute rolling mean excluding current value
+    avg_last_5 = rollapply(lag(bloom_doy), width = 5, FUN = mean, align = "right", fill = NA, partial = TRUE),
+    sd_last_5  = rollapply(lag(bloom_doy), width = 5, FUN = sd, align = "right", fill = NA, partial = TRUE),
+    
+    avg_last_10 = rollapply(lag(bloom_doy), width = 10, FUN = mean, align = "right", fill = NA, partial = TRUE),
+    sd_last_10  = rollapply(lag(bloom_doy), width = 10, FUN = sd, align = "right", fill = NA, partial = TRUE),
+    
+    Year = year(bloom_date)
+  ) %>%
+  select(-bloom_date, -bloom_doy) %>% tail(.,1)
+
+```
+
+```{r}
+merged_data_liestal <- left_join(gdd_matrix_liestal,liestal_bloom_lag,by=join_by(Year == Year))
+merged_data_kyoto <- left_join(gdd_matrix_kyoto,kyoto_bloom_lag,by=join_by(Year == Year))
+merged_data_dc <- left_join(gdd_matrix_dc,dc_bloom_lag,by=join_by(Year == Year))
+
+```
+
+## Predict Liestal
+
+```{r}
+results_rf <- read_csv("Data/liestal_rf_results.csv") %>% arrange(-desc(MAE))
+head(results_rf)
+```
+
+```{r}
+results_xgb <- read_csv("Data/liestal_xgb_results.csv") %>% arrange(-desc(MAE))
+head(results_xgb)
+```
+
+xgboost is better, use that
+
+```{r}
+
+set.seed(490)
+final_liestal_data <- read_csv("Data/final_liestal_data.csv")
+
+X_train <- as.matrix(final_liestal_data %>% select(-bloom_doy))
+y_train <- final_liestal_data$bloom_doy
+
+dtrain <- xgb.DMatrix(data = X_train,
+                      label = y_train) 
+
+params <- list(
+   max_depth = results_xgb[1,]$max_depth,
+  eta = results_xgb[1,]$eta,
+  gamma = results_xgb[1,]$gamma,
+  min_child_weight = results_xgb[1,]$min_child_weight,
+  subsample = results_xgb[1,]$subsample,
+  colsample_bytree = results_xgb[1,]$colsample_bytree
+  
+)
+liestal_xgb <- xgb.train(
+  params = params,
+  data = dtrain,
+  nrounds = results_xgb[1,]$nrounds,
+  objective = "reg:absoluteerror",
+  verbose=1
+)
+```
+
+predicted bloom date for liestal 2025
+
+```{r}
+topredict <- xgb.DMatrix(data = as.matrix(merged_data_liestal))
+predict(liestal_xgb,topredict)
+```
+
+#### Interval
+
+```{r}
+lower <- predict(liestal_xgb,topredict) - results_xgb[1,]$RMSE
+upper <- predict(liestal_xgb,topredict) + results_xgb[1,]$RMSE
+
+paste0("(",lower,",",upper,")")
+```
+
+## Predict kyoto 
+
+```{r}
+results_rf_kyoto <- read_csv("Data/kyoto_rf_results.csv") %>% arrange(-desc(MAE))
+head(results_rf_kyoto)
+```
+
+```{r}
+results_xgb_kyoto <- read_csv("Data/kyoto_xgb_results.csv") %>% arrange(-desc(MAE))
+head(results_xgb_kyoto)
+```
+
+```{r}
+final_kyoto_data <- read_csv("Data/final_kyoto_data.csv")
+
+X_train <- as.matrix(final_kyoto_data %>% select(-bloom_doy))
+y_train <- final_kyoto_data$bloom_doy
+
+dtrain <- xgb.DMatrix(data = X_train,
+                      label = y_train) 
+
+params <- list(
+   max_depth = results_xgb_kyoto[1,]$max_depth,
+  eta = results_xgb_kyoto[1,]$eta,
+  gamma = results_xgb_kyoto[1,]$gamma,
+  min_child_weight = results_xgb_kyoto[1,]$min_child_weight,
+  subsample = results_xgb_kyoto[1,]$subsample,
+  colsample_bytree = results_xgb_kyoto[1,]$colsample_bytree
+  
+)
+
+set.seed(490)
+kyoto_xgb <- xgb.train(
+  params = params,
+  data = dtrain,
+  nrounds = results_xgb_kyoto[1,]$nrounds,
+  objective = "reg:absoluteerror",
+  verbose=1
+)
+
+
+```
+
+```{r}
+topredict2 <- xgb.DMatrix(data = as.matrix(merged_data_kyoto))
+predict(kyoto_xgb,topredict2)
+```
+
+#### interval
+
+```{r}
+lower <- predict(kyoto_xgb,topredict2) - results_xgb_kyoto[1,]$RMSE
+upper <- predict(kyoto_xgb,topredict2) + results_xgb_kyoto[1,]$RMSE
+
+paste0("(",lower,",",upper,")")
+```
+
+## Predict dc bloom
+
+```{r}
+results_rf_dc <- read_csv("Data/dc_rf_results.csv") %>% arrange(-desc(MAE))
+head(results_rf_dc)
+```
+
+```{r}
+results_xgb_dc <- read_csv("Data/dc_xgb_results.csv") %>% arrange(-desc(MAE))
+head(results_xgb_dc)
+```
+
+```{r}
+final_dc_data <- read_csv("Data/final_dc_data.csv")
+
+X_train <- as.matrix(final_dc_data %>% select(-bloom_doy))
+y_train <- final_dc_data$bloom_doy
+
+dtrain <- xgb.DMatrix(data = X_train,
+                      label = y_train) 
+
+params <- list(
+   max_depth = results_xgb_dc[1,]$max_depth,
+  eta = results_xgb_dc[1,]$eta,
+  gamma = results_xgb_dc[1,]$gamma,
+  min_child_weight = results_xgb_dc[1,]$min_child_weight,
+  subsample = results_xgb_dc[1,]$subsample,
+  colsample_bytree = results_xgb_dc[1,]$colsample_bytree
+  
+)
+set.seed(490)
+dc_xgb <- xgb.train(
+  params = params,
+  data = dtrain,
+  nrounds = results_xgb_dc[1,]$nrounds,
+  objective = "reg:absoluteerror",
+  verbose=1
+)
+```
+
+```{r}
+topredict3 <- xgb.DMatrix(data = as.matrix(merged_data_dc))
+predict(dc_xgb,topredict3)
+```
+
+#### interval
+
+```{r}
+lower <- predict(dc_xgb,topredict3) - results_xgb_dc[1,]$RMSE
+upper <- predict(dc_xgb,topredict3) + results_xgb_dc[1,]$RMSE
+
+paste0("(",lower,",",upper,")")
+```
+
+## Predict Vancouver and NYC
+
+```{r}
+
+#get dummies
+
+merged_data_nyc <- left_join(gdd_matrix_nyc,nyc_bloom_lag,by=join_by(Year == Year)) %>%
+  mutate(species = "yedoensis",
+         cultivar = "NoneGiven",
+         alt = 8.5,
+         location="nyc")
+
+
+merged_data_vancouver <- left_join(gdd_matrix_vancouver,vancouver_bloom_lag,by=join_by(Year == Year)) %>%
+  mutate(species = "yedoensis",
+         cultivar = "Akebono",
+         alt = 24,
+         location="vancouver")
+
+
+final_data_liestal <- read_csv("Data/final_liestal_data.csv") %>%
+  mutate(species = "avium",
+         cultivar = "NoneGiven",
+         alt = 350,
+         location="liestal") %>% select(-bloom_doy)
+
+final_data_kyoto <- read_csv("Data/final_kyoto_data.csv") %>%
+  mutate(species = "jamasakura",
+         cultivar = "NoneGiven",
+         alt = 44,
+         location="kyoto")%>% select(-bloom_doy)
+
+final_data_dc <- read_csv("Data/final_dc_data.csv") %>%
+  mutate(species = "yedoensis",
+         cultivar = "Someiyoshino",
+         alt = 0,
+         location="dc")%>% select(-bloom_doy)
+
+all_final_data <- rbind(final_data_liestal,final_data_kyoto,final_data_dc,merged_data_nyc,merged_data_vancouver) 
+
+categorical_vars <- c("species", "cultivar", "location")
+dummy_encoder <- dummyVars(~ ., data = all_final_data[, categorical_vars], fullRank = TRUE)
+enconded_cat_vars <- predict(dummy_encoder, newdata = all_final_data[, categorical_vars])
+
+all_final_data <- all_final_data %>% 
+  select(-all_of(categorical_vars)) %>%
+  cbind(as.data.frame(enconded_cat_vars))
+
+merged_data_vancouver <- all_final_data[nrow(all_final_data),]
+merged_data_nyc <- all_final_data[nrow(all_final_data)-1,]
+
+```
+
+```{r}
+results_rf_nyc <- read_csv("Data/all_city_rf_results.csv") %>% arrange(-desc(mae_nyc))
+head(results_rf_nyc)
+```
+
+```{r}
+results_xgb_nyc <- read_csv("Data/all_city_xgb_results.csv") %>% arrange(-desc(mae_nyc))
+head(results_xgb_nyc)
+```
+
+```{r}
+all_final_data <- read_csv("Data/all_final_data.csv")
+
+X_train <- as.matrix(all_final_data %>% select(-bloom_doy))
+y_train <- all_final_data$bloom_doy
+
+dtrain <- xgb.DMatrix(data = X_train,
+                      label = y_train) 
+
+
+params <- list(
+   max_depth = results_xgb_nyc[1,]$max_depth,
+  eta = results_xgb_nyc[1,]$eta,
+  gamma = results_xgb_nyc[1,]$gamma,
+  min_child_weight = results_xgb_nyc[1,]$min_child_weight,
+  subsample = results_xgb_nyc[1,]$subsample,
+  colsample_bytree = results_xgb_nyc[1,]$colsample_bytree
+  
+)
+nyc_xgb <- xgb.train(
+  params = params,
+  data = dtrain,
+  nrounds = results_xgb_nyc[1,]$nrounds,
+  objective = "reg:absoluteerror",
+  verbose=1
+)
+```
+
+```{r}
+topredict4 <- xgb.DMatrix(data = as.matrix(merged_data_nyc))
+predict(nyc_xgb,topredict4)
+```
+
+```{r}
+lower <- predict(nyc_xgb,topredict4) - results_xgb_nyc[1,]$rmse_nyc
+upper <- predict(nyc_xgb,topredict4) + results_xgb_nyc[1,]$rmse_nyc
+
+paste0("(",lower,",",upper,")")
+```
+
+```{r}
+results_rf_van <- read_csv("Data/all_city_rf_results.csv") %>% arrange(-desc(mae_van))
+head(results_rf_van)
+```
+
+```{r}
+results_xgb_van <- read_csv("Data/all_city_xgb_results.csv") %>% arrange(-desc(mae_van))
+head(results_xgb_van)
+```
+
+```{r}
+params <- list(
+   max_depth = results_xgb_van[1,]$max_depth,
+  eta = results_xgb_van[1,]$eta,
+  gamma = results_xgb_van[1,]$gamma,
+  min_child_weight = results_xgb_van[1,]$min_child_weight,
+  subsample = results_xgb_van[1,]$subsample,
+  colsample_bytree = results_xgb_van[1,]$colsample_bytree
+  
+)
+van_xgb <- xgb.train(
+  params = params,
+  data = dtrain,
+  nrounds = results_xgb_van[1,]$nrounds,
+  objective = "reg:absoluteerror",
+  verbose=1
+)
+```
+
+```{r}
+topredict5 <- xgb.DMatrix(data = as.matrix(merged_data_vancouver))
+predict(van_xgb,topredict5)
+```
+
+```{r}
+lower <- predict(van_xgb,topredict5) - results_xgb_van[1,]$rmse_van
+upper <- predict(van_xgb,topredict5) + results_xgb_van[1,]$rmse_van
+
+paste0("(",lower,",",upper,")")
+```

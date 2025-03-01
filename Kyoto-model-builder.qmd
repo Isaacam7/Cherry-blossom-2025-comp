@@ -1,0 +1,273 @@
+---
+title: "Kyoto Model Builder"
+format: html
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+library(chillR)
+library(randomForest)
+library(caret)
+library(Matrix)
+library(xgboost)
+library(zoo)
+library(parallel)
+```
+
+```{r}
+kyoto <- read_csv("Data/kyoto-weather-data.csv")
+head(kyoto)
+```
+```{r}
+kyoto_bloom <- read.csv("Data/kyoto.csv")
+str(kyoto_bloom)
+```
+
+```{r}
+kyoto_bloom_only <- kyoto_bloom %>%
+  select(bloom_date,bloom_doy) %>%
+  mutate(bloom_date = as.Date(bloom_date))
+```
+
+
+
+```{r}
+
+T_base <- 4  
+T_max_cap <- 36  
+
+kyoto_GDD <- kyoto %>%
+  mutate(
+    Year = year(DATE),
+    TAVG_adj = pmin(TAVG, T_max_cap),
+    GDD = ifelse(DATE >= as.Date(paste0(Year, "-01-01")) & DATE <= as.Date(paste0(Year, "-05-16")), 
+                 pmax(TAVG_adj - T_base, 0), 0)  
+  )
+```
+
+```{r}
+kyoto_GDD <- kyoto_GDD %>%
+  group_by(Year) %>%
+  mutate(GDD_cumsum = cumsum(GDD)) %>%
+  ungroup()
+```
+
+```{r}
+kyoto_GDD <- kyoto_GDD %>%
+  filter(DATE >= as.Date(paste0(Year, "-01-01")) & DATE <= as.Date(paste0(Year, "-05-16"))) %>%
+  mutate(JDay = as.numeric(format(DATE, "%j")) - as.numeric(format(as.Date(paste0(Year, "-01-01")), "%j")) + 1)  
+
+gdd_matrix <- kyoto_GDD %>%
+  select(Year, JDay, GDD_cumsum) %>%
+  pivot_wider(names_from = JDay, values_from = GDD_cumsum, names_prefix = "CUMSUM_GDD_DAY_") %>%
+  filter(row_number() <= n()-1) %>%
+  select(-CUMSUM_GDD_DAY_137)
+
+head(gdd_matrix)
+```
+
+```{r}
+kyoto_bloom_lag <- kyoto_bloom_only %>%
+  arrange(bloom_date) %>%
+  mutate(
+    last_year_bloom_doy = lag(bloom_doy, 1)
+  ) %>%
+  mutate(
+    # Dynamically get the last N available values for mean and SD
+    avg_last_5 = sapply(seq_len(n()), function(i) {
+      mean(lag(bloom_doy)[max(1, i-4):i], na.rm = TRUE)  # Uses up to 5 past values
+    }),
+    sd_last_5 = sapply(seq_len(n()), function(i) {
+      sd(lag(bloom_doy)[max(1, i-4):i], na.rm = TRUE)
+    }),
+    avg_last_10 = sapply(seq_len(n()), function(i) {
+      mean(lag(bloom_doy)[max(1, i-9):i], na.rm = TRUE)  # Uses up to 10 past values
+    }),
+    sd_last_10 = sapply(seq_len(n()), function(i) {
+      sd(lag(bloom_doy)[max(1, i-9):i], na.rm = TRUE)
+    }),
+    Year = year(bloom_date)
+  ) %>%
+  select(-bloom_date, -bloom_doy)
+
+head(kyoto_bloom_lag)
+```
+```{r}
+merged_data <- left_join(gdd_matrix,kyoto_bloom_lag,by=join_by(Year == Year)) 
+bloom_data <-  kyoto_bloom_only %>% filter(year(bloom_date) != 2005) %>%
+  tail(., nrow(merged_data))
+```
+
+Fix any NAs in cumsum vars for merged_data
+```{r}
+merged_data$CUMSUM_GDD_DAY_1[is.na(merged_data$CUMSUM_GDD_DAY_1)] <- 0
+
+for (i in 2:136) {  
+  col_name <- paste0("CUMSUM_GDD_DAY_", i)
+  prev_col <- paste0("CUMSUM_GDD_DAY_", i - 1)
+  
+  merged_data[[col_name]][is.na(merged_data[[col_name]])] <- merged_data[[prev_col]][is.na(merged_data[[col_name]])]
+}
+```
+
+
+```{r}
+final_data <-cbind(merged_data , bloom_doy = bloom_data$bloom_doy)
+#write.csv(final_data, "Data/final_kyoto_data.csv",row.names = F)
+
+set.seed(490)
+train_index <- createDataPartition(final_data$bloom_doy, p = 0.8, list = FALSE)
+train_data <- final_data[train_index, ]
+test_data <- final_data[-train_index, ]
+```
+
+```{r}
+set.seed(490)
+rf_model <- randomForest(bloom_doy ~ .,
+                         data = train_data,
+                         ntree = 50,
+                         mtry=50)
+
+predictions <- predict(rf_model, test_data)
+
+rmse <- sqrt(mean((predictions - test_data$bloom_doy)^2))
+mae <- mean(abs(predictions - test_data$bloom_doy))
+
+cat("RMSE:", rmse, "\n")
+cat("MAE:", mae, "\n")
+```
+Good mae score, now to do 3-fold CV to identify the best param combo to minimize mae
+
+```{r}
+set.seed(490)
+
+ntree_values <- seq(10, 300, by = 10)  
+mtry_values <- seq(5, 140, by = 10)    
+nodesize_values <- seq(1, 50, by = 5)  
+
+param_grid <- expand.grid(ntree_values, mtry_values, nodesize_values)
+
+num_cores <- detectCores(logical = F) - 1  
+
+train_control <- trainControl(method = "cv", number = 3)
+
+train_rf <- function(params) {
+  nt <- params[1]
+  mt <- params[2]
+  ns <- params[3]
+  
+  rf_model <- train(
+    bloom_doy ~ .,
+    data = train_data,
+    method = "rf",
+    trControl = train_control,
+    tuneGrid = data.frame(mtry = mt),
+    ntree = nt,
+    nodesize = ns
+  )
+  
+  predictions <- predict(rf_model, test_data)
+  
+  rmse <- sqrt(mean((predictions - test_data$bloom_doy)^2))
+  mae <- mean(abs(predictions - test_data$bloom_doy))
+  
+  return(data.frame(ntree = nt, mtry = mt, nodesize = ns, RMSE = rmse, MAE = mae))
+}
+
+# Parallel Processing to speed up 
+cl <- makeCluster(num_cores)
+clusterExport(cl, varlist = c("train_rf", "train_data", "test_data", "train_control", "param_grid"))
+clusterEvalQ(cl, library(randomForest))
+clusterEvalQ(cl, library(caret))
+
+results_list <- parLapply(cl, 1:nrow(param_grid), function(i) {
+  train_rf(as.numeric(param_grid[i, ]))
+})
+
+stopCluster(cl)
+
+results <- bind_rows(results_list)
+```
+```{r}
+#write.csv(results, "Data/kyoto_rf_results.csv", row.names = FALSE)
+```
+
+```{r}
+set.seed(490)
+
+nrounds_values <- c(50,150,200,250) 
+max_depth_values <- c(3, 6, 9)
+eta_values <- c(0.01, 0.05, 0.1)
+min_child_weight_values <- c(1, 3, 5)
+subsample_values <- c(0.6, 0.8, 1.0)
+colsample_bytree_values <- c(0.6, 0.8, 1.0)
+gamma_values <- c(0, 0.1, 1, 5)
+
+param_grid <- expand.grid(nrounds = nrounds_values,
+                          max_depth = max_depth_values,
+                          eta = eta_values,
+                          min_child_weight = min_child_weight_values,
+                          subsample = subsample_values,
+                          colsample_bytree = colsample_bytree_values,
+                          gamma = gamma_values)
+
+
+num_cores <- detectCores(logical = F) - 1  
+
+
+train_control <- trainControl(method = "cv", number = 3)
+
+
+train_xgb <- function(params) {
+  nrounds <- params[1]
+  max_depth <- params[2]
+  eta <- params[3]
+  min_child_weight <- params[4]
+  subsample <- params[5]
+  colsample_bytree <- params[6]
+  gamma <- params[7]
+
+   xgb_model <- train(
+    bloom_doy ~ .,
+    data = train_data,
+    method = "xgbTree",
+    trControl = train_control,
+    tuneGrid = data.frame(nrounds = nrounds, max_depth = max_depth, eta = eta,
+                          min_child_weight = min_child_weight, subsample = subsample,
+                          colsample_bytree = colsample_bytree, gamma=gamma),
+    metric = "MAE",
+    objective = "reg:absoluteerror"
+  )
+
+  predictions <- predict(xgb_model, test_data)
+
+  rmse <- sqrt(mean((predictions - test_data$bloom_doy)^2))
+  mae <- mean(abs(predictions - test_data$bloom_doy))
+
+  return(data.frame(nrounds = nrounds, max_depth = max_depth, eta = eta, gamma=gamma,
+                    min_child_weight = min_child_weight, subsample = subsample,
+                    colsample_bytree = colsample_bytree, RMSE = rmse, MAE = mae))
+}
+
+
+cl <- makeCluster(num_cores)
+clusterExport(cl, varlist = c("train_xgb", "param_grid", "train_data", "test_data", "train_control"))
+clusterEvalQ(cl, {
+  library(xgboost)
+  library(caret)
+})
+
+results_list <- parLapply(cl, 1:nrow(param_grid), function(i) {
+  train_xgb(as.numeric(param_grid[i, ]))
+})
+
+stopCluster(cl)
+
+results_xgb <- bind_rows(results_list)
+```
+
+```{r}
+#write.csv(results_xgb, "Data/kyoto_xgb_results.csv", row.names = FALSE)
+```
+

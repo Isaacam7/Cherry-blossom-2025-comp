@@ -6,7 +6,6 @@ editor: visual
 
 ```{r}
 library(tidyverse)
-library(chillR)
 library(randomForest)
 library(caret)
 library(Matrix)
@@ -31,45 +30,6 @@ liestal_bloom_only <- liestal_bloom %>%
   mutate(bloom_date = as.Date(bloom_date))
 ```
 
-## Basic Temperature variables
-
-```{r}
-liestal_seasons <- liestal %>%
-  mutate(
-    YEAR = year(DATE),
-    MONTH = month(DATE),
-    SEASON = case_when(
-      MONTH %in% c(9, 10, 11) ~ "Fall",
-      MONTH %in% c(12, 1, 2) ~ "Winter",
-      MONTH %in% c(3, 4, 5) ~ "Spring",
-      TRUE ~ NA_character_
-    )
-  ) %>%
-  filter(!is.na(SEASON))
-head(liestal_seasons)
-```
-
-```{r}
-liestal_temp_weather_summary <- liestal_seasons %>%
-  group_by(YEAR, SEASON) %>%
-  summarise(
-    ACC_TMAX = sum(TMAX, na.rm = TRUE),
-    ACC_TMIN = sum(TMIN, na.rm = TRUE),
-    ACC_TAVG = sum(TAVG, na.rm = TRUE),
-    ACC_PRCP = sum(PRCP, na.rm = TRUE),
-    AVG_TMAX = mean(TMAX, na.rm = TRUE),
-    AVG_TMIN = mean(TMIN, na.rm = TRUE),
-    AVG_TAVG = mean(TAVG, na.rm = TRUE),
-    AVG_PRCP = mean(PRCP, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  pivot_wider(
-    names_from = SEASON,
-    values_from = c(ACC_TMAX, ACC_TMIN, ACC_TAVG, ACC_PRCP, AVG_TMAX, AVG_TMIN, AVG_TAVG, AVG_PRCP),
-    names_glue = "{.value}_{SEASON}"
-  )
-head(liestal_temp_weather_summary)
-```
 
 ## Growing degree days
 
@@ -77,36 +37,6 @@ The first variable to make is cumulative growing degree days (GDD). GDD are a me
 
 
 ```{r}
-temp_data <- liestal %>%
-  mutate(
-    Year = as.numeric(format(DATE, "%Y")),
-    Month = as.numeric(format(DATE, "%m")),
-    Day = as.numeric(format(DATE, "%d"))
-  ) %>%
-  select(Year, Month, Day, Tmin = TMIN, Tmax = TMAX)
-hourly_temps <- stack_hourly_temps(temp_data, latitude = 47.4814)$hourtemps
-```
-
-```{r}
-chilling_start <- "10-01"  
-chilling_end <- "01-01"    
-
-# Filter data for the chilling period
-chilling_data <- hourly_temps %>%
-  filter(
-    (paste0(Month, "-", Day) >= chilling_start & Month >= 11) |  
-    (paste0(Month, "-", Day) <= chilling_end & Month <= 2)       
-  )
-
-chill_results <- chilling(
-  hourtemps  = chilling_data,
-  Start_JDay = min(chilling_data$JDay),  
-  End_JDay = max(chilling_data$JDay)     
-)
-```
-
-```{r}
-
 T_base <- 4  
 T_max_cap <- 36  
 
@@ -135,12 +65,6 @@ gdd_matrix <- liestal_GDD %>%
   select(Year, JDay, GDD_cumsum) %>%
   pivot_wider(names_from = JDay, values_from = GDD_cumsum, names_prefix = "CUMSUM_GDD_DAY_") %>%
   filter(row_number() <= n()-1) %>%
-  mutate(
-    Chilling_Hours = chill_results$Chilling_Hours,
-    Utah_Model = chill_results$Utah_Model,
-    Chill_Portions = chill_results$Chill_portions,
-    GDH =chill_results$GDH
-  ) %>%
   select(-CUMSUM_GDD_DAY_137)
 
 head(gdd_matrix)
@@ -152,27 +76,39 @@ GDD and chilling data have been formed ordered by row(each year). Time for he ne
 
 ```{r}
 liestal_bloom_lag <- liestal_bloom_only %>%
-  arrange(bloom_date) %>% 
+  arrange(bloom_date) %>%
   mutate(
-    last_year_bloom_doy = lag(bloom_doy, 1),
-    avg_last_5 = rollapply(bloom_doy, width = 5, FUN = mean, align = "right", fill = NA, partial = TRUE),
-    sd_last_5 = rollapply(bloom_doy, width = 5, FUN = sd, align = "right", fill = NA, partial = TRUE),
-    avg_last_10 = rollapply(bloom_doy, width = 10, FUN = mean, align = "right", fill = NA, partial = TRUE),
-    sd_last_10 = rollapply(bloom_doy, width = 10, FUN = sd, align = "right", fill = NA, partial = TRUE),
-    Year = year(bloom_date) 
+    last_year_bloom_doy = lag(bloom_doy, 1)
   ) %>%
-  select(-bloom_date,-bloom_doy)
+  mutate(
+    # Dynamically get the last N available values for mean and SD
+    avg_last_5 = sapply(seq_len(n()), function(i) {
+      mean(lag(bloom_doy)[max(1, i-4):i], na.rm = TRUE)  # Uses up to 5 past values
+    }),
+    sd_last_5 = sapply(seq_len(n()), function(i) {
+      sd(lag(bloom_doy)[max(1, i-4):i], na.rm = TRUE)
+    }),
+    avg_last_10 = sapply(seq_len(n()), function(i) {
+      mean(lag(bloom_doy)[max(1, i-9):i], na.rm = TRUE)  # Uses up to 10 past values
+    }),
+    sd_last_10 = sapply(seq_len(n()), function(i) {
+      sd(lag(bloom_doy)[max(1, i-9):i], na.rm = TRUE)
+    }),
+    Year = year(bloom_date)
+  ) %>%
+  select(-bloom_date, -bloom_doy)
+
 head(liestal_bloom_lag)
 ```
 
 ```{r}
-merged_data <- left_join(gdd_matrix,liestal_bloom_lag,by=join_by(Year == Year)) %>%
-  left_join(.,liestal_temp_weather_summary,by=join_by(Year==YEAR))
+merged_data <- left_join(gdd_matrix,liestal_bloom_lag,by=join_by(Year == Year))
 bloom_data <- tail(liestal_bloom_only, 124)
 ```
 
 ```{r}
 final_data <-cbind(merged_data , bloom_doy = bloom_data$bloom_doy)
+#write.csv(final_data, "Data/final_liestal_data.csv",row.names = F)
 
 set.seed(490)
 train_index <- createDataPartition(final_data$bloom_doy, p = 0.8, list = FALSE)
@@ -185,8 +121,9 @@ test_data <- final_data[-train_index, ]
 set.seed(490)
 rf_model <- randomForest(bloom_doy ~ .,
                          data = train_data,
-                         ntree = 50,
-                         mtry=50)
+                         ntree = 10,
+                         mtry=75,
+                         nodesize=36)
 
 predictions <- predict(rf_model, test_data)
 
@@ -196,14 +133,14 @@ mae <- mean(abs(predictions - test_data$bloom_doy))
 cat("RMSE:", rmse, "\n")
 cat("MAE:", mae, "\n")
 ```
-Good mae score, now to do 3-fold CV to identify the best param combo to maximize ae
+Good mae score, now to do 3-fold CV to identify the best param combo to minimize mae. Will proceed without other variables.
 
 
 ```{r}
 set.seed(490)
 
 ntree_values <- seq(10, 300, by = 10)  
-mtry_values <- seq(5, 170, by = 10)    
+mtry_values <- seq(5, 140, by = 10)    
 nodesize_values <- seq(1, 50, by = 5)  
 
 param_grid <- expand.grid(ntree_values, mtry_values, nodesize_values)
@@ -249,6 +186,7 @@ stopCluster(cl)
 
 results <- bind_rows(results_list)
 ```
+
 ```{r}
 #write.csv(results, "Data/liestal_rf_results.csv", row.names = FALSE)
 ```
