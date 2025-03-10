@@ -2,7 +2,7 @@
 
 ### First step:
 
-In order to reproduce fully (as if you just want to see final results feel free to just run "prediction_maker.qmd") you will need to create your own noaa token, which can be done at (https://www.ncdc.noaa.gov/cdo-web/token) and then place it in a text file called "noaa-token.txt"  
+In order to reproduce fully (as if you just want to see final results feel free to just run "prediction_maker.qmd") you will need to create your own noaa token, which can be done at (https://www.ncdc.noaa.gov/cdo-web/token) and then place it in a text file called "noaa-token.txt" (Note in the Data folder) 
 
 Make sure you have a stable internet connection.
 
